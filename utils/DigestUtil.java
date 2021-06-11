@@ -1,11 +1,10 @@
 package cn.wl.code;
 
-import org.apache.commons.lang3.time.DateFormatUtils;
-
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.Base64;
-import java.util.Date;
+import java.util.function.Function;
 
 /**
  * 自定义加密解密类 Created by 韦武良 on 2016年10月17日.
@@ -18,7 +17,7 @@ public class DigestUtil {
      * 自定义加密
      *
      * @param str     内容
-     * @param seconds 有效期（秒）
+     * @param seconds 1年内有效期（秒）
      * @return
      */
     public static String encode(String str, Integer... seconds) {
@@ -29,103 +28,58 @@ public class DigestUtil {
      * 自定义加密
      *
      * @param bytes   内容
-     * @param seconds 有效期（秒）
+     * @param seconds 1年内有效期（秒）
      * @return
      */
     public static String encode(byte[] bytes, Integer... seconds) {
+        Function<byte[], String> fun = (d) -> Base64.getEncoder().encodeToString(d);
         if (seconds == null || seconds.length == 0) {
-            return Base64.getEncoder().encodeToString($(bytes));
+            return fun.apply($(bytes));
         }
+
+        LocalDateTime nowDate = LocalDateTime.now();
+        LocalDateTime newDate = nowDate.plusYears(1).withMonth(1).withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0);
 
         long second = seconds[0];
-        LocalDateTime nowDate = LocalDateTime.now();
-
-        long key = 0;
-        LocalDateTime newDate = null;
-        StringBuilder sb = new StringBuilder();
-        if (second < 60) {
-            // 有效期（秒）
-            sb.append(nowDate.getYear());
-            key = nowDate.getMonthValue();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = nowDate.getDayOfMonth();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = nowDate.getHour();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = nowDate.getMinute();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = Long.parseLong(sb.toString());
-            newDate = nowDate.plusMinutes(1).withSecond(0);
-        } else if (second < 3600) {
-            // 有效期（分钟）
-            sb.append(nowDate.getYear());
-            key = nowDate.getMonthValue();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = nowDate.getDayOfMonth();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = nowDate.getHour();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = Long.parseLong(sb.toString());
-            newDate = nowDate.plusHours(1).withMinute(0).withSecond(0);
-        } else if (second < 86400) {
-            // 有效期（小时）
-            sb.append(nowDate.getYear());
-            key = nowDate.getMonthValue();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = nowDate.getDayOfMonth();
-            sb = key > 9 ? sb.append(key) : sb.append("0").append(key);
-            key = Long.parseLong(sb.toString());
-            newDate = nowDate.plusDays(1).withHour(0).withMinute(0).withSecond(0);
-        } else {
-            // 有效期（天）
-            key = nowDate.getYear();
-            newDate = nowDate.plusYears(1).withMonth(1).withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0);
-        }
-
+        long key = nowDate.getYear();
         long secret = (newDate.toEpochSecond(ZoneOffset.UTC)) - second - (nowDate.toEpochSecond(ZoneOffset.UTC));
-        Long[] keys = new Long[KEYS.length];
-        keys[0] = (KEYS[0] & key) + secret + second;
-        System.arraycopy(KEYS, 1, keys, 1, keys.length - 1);
+
+        long k1 = (KEYS[0] & key) * 1000000 + (KEYS[0] & secret) * 1000 + (KEYS[0] & second);
+        Long[] keys = Arrays.asList(KEYS).stream().map(d -> d ^ k1).toArray(Long[]::new);
         String code = Base64.getEncoder().encodeToString($(bytes, keys));
-        return code + encode(String.format("%09d", secret));
+
+        long k2 = seconds[0].longValue();
+        keys = Arrays.asList(KEYS).stream().map(d -> d & k2).toArray(Long[]::new);
+        return code + fun.apply($(String.format("%09d", secret).getBytes(), keys));
     }
 
     /**
      * 自定义解密
      *
      * @param str     内容
-     * @param seconds 有效期（秒）
+     * @param seconds 1年内有效期（秒）
      * @return
      */
     public static byte[] decode(String str, Integer... seconds) {
+        Function<String, byte[]> fun = (d) -> Base64.getDecoder().decode(d);
         if (seconds == null || seconds.length == 0) {
-            return $(Base64.getDecoder().decode(str));
+            return $(fun.apply(str));
         }
 
         try {
-            int second = seconds[0];
+            long k2 = seconds[0].longValue();
+            Long[] keys = Arrays.asList(KEYS).stream().map(d -> d & k2).toArray(Long[]::new);
             String code = str.substring(0, str.length() - 12);
-            long secret = Long.parseLong(new String(decode(str.substring(str.length() - 12))));
 
-            String pattern = null;
-            if (second < 60) {
-                pattern = "yyyyMMddHHmm";
-            } else if (second < 3600) {
-                pattern = "yyyyMMddHH";
-            } else if (second < 86400) {
-                pattern = "yyyyMMdd";
-            } else {
-                pattern = "yyyy";
-            }
+            long second = seconds[0];
+            long secret = Long.parseLong(new String($(fun.apply(str.substring(code.length())), keys)));
+            long key = LocalDateTime.now().plusSeconds(secret).getYear();
 
-            long key = Long.parseLong(DateFormatUtils.format(((secret * 1000) + new Date().getTime()), pattern));
-
-            Long[] keys = new Long[KEYS.length];
-            keys[0] = (KEYS[0] & key) + secret + second;
-            System.arraycopy(KEYS, 1, keys, 1, keys.length - 1);
+            long k1 = (KEYS[0] & key) * 1000000 + (KEYS[0] & secret) * 1000 + (KEYS[0] & second);
+            keys = Arrays.asList(KEYS).stream().map(d -> d ^ k1).toArray(Long[]::new);
             return $(Base64.getDecoder().decode(code), keys);
         } catch (Exception e) {
-            return $(Base64.getDecoder().decode(str));
+            return $(fun.apply(str));
         }
     }
 
